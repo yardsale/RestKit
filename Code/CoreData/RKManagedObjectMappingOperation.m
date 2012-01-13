@@ -21,6 +21,10 @@
 #import "RKManagedObjectMappingOperation.h"
 #import "RKManagedObjectMapping.h"
 #import "NSManagedObject+ActiveRecord.h"
+
+#import "RKManagedObjectStore.h"
+#import "RKObjectManager.h"
+
 #import "RKLog.h"
 
 // Set Logging Component
@@ -58,14 +62,39 @@
     NSAssert(primaryKeyAttributeOfRelatedObject, @"Cannot connect relationship: mapping for %@ has no primary key attribute specified", NSStringFromClass(objectMapping.objectClass));
     id valueOfLocalPrimaryKeyAttribute = [self.destinationObject valueForKey:primaryKeyAttribute];
     RKLogDebug(@"Connecting relationship at keyPath '%@' to object with primaryKey attribute '%@'", relationshipName, primaryKeyAttributeOfRelatedObject);
+
     if (valueOfLocalPrimaryKeyAttribute) {
-        id relatedObject = [objectMapping.objectClass findFirstByAttribute:primaryKeyAttributeOfRelatedObject withValue:valueOfLocalPrimaryKeyAttribute];
-        if (relatedObject) {                
+        // Get entity description of object being fetched
+        NSEntityDescription * entity = [NSEntityDescription entityForName:NSStringFromClass(objectMapping.objectClass) inManagedObjectContext:[NSManagedObject managedObjectContext]];
+
+        // Use object cache for fast lookup
+        RKManagedObjectStore* objectStore = [RKObjectManager sharedManager].objectStore;
+        NSAssert(objectStore, @"Object store cannot be nil before performing relationship mapping.");
+
+        NSDictionary * objectCache = [objectStore objectCacheForEntity:entity withPrimaryKeyAttribute:primaryKeyAttributeOfRelatedObject];
+
+        id lookupValue = [valueOfLocalPrimaryKeyAttribute respondsToSelector:@selector(stringValue)] ? [valueOfLocalPrimaryKeyAttribute stringValue] : valueOfLocalPrimaryKeyAttribute;
+
+        // No need to attempt fetching the object; cache is a complete copy of table
+        id relatedObject = [objectCache valueForKey:lookupValue];
+
+        if (relatedObject) {
             RKLogTrace(@"Connected relationship '%@' to object with primary key value '%@': %@", relationshipName, valueOfLocalPrimaryKeyAttribute, relatedObject);
         } else {
+            // We have a reasonable assurance that the cache contains all objects,
+            // unless there are multiple contexts updating the store simultaneously.
             RKLogTrace(@"Failed to find object to connect relationship '%@' with primary key value '%@'", relationshipName, valueOfLocalPrimaryKeyAttribute);
         }
-        [self.destinationObject setValue:relatedObject forKey:relationshipName];
+
+        // Test whether update is necessary
+        id currentValue = [self.destinationObject valueForKey:relationshipName];
+        BOOL shouldUpdateDestination = YES;
+        if ([currentValue respondsToSelector:@selector(isEqual:)]) {
+            shouldUpdateDestination = ![currentValue isEqual:relatedObject];
+        }
+        if (shouldUpdateDestination) {
+            [self.destinationObject setValue:relatedObject forKey:relationshipName];
+        }
     } else {
         RKLogTrace(@"Failed to find primary key value for attribute '%@'", primaryKeyAttribute);
     }

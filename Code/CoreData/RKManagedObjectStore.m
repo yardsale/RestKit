@@ -21,6 +21,7 @@
 #import "RKManagedObjectStore.h"
 #import "RKAlert.h"
 #import "NSManagedObject+ActiveRecord.h"
+#import "NSDictionary+RKAdditions.h"
 #import "RKLog.h"
 #import "RKDirectory.h"
 
@@ -47,6 +48,7 @@ static NSString* const RKManagedObjectStoreThreadDictionaryEntityCacheKey = @"RK
 @synthesize managedObjectModel = _managedObjectModel;
 @synthesize persistentStoreCoordinator = _persistentStoreCoordinator;
 @synthesize managedObjectCache = _managedObjectCache;
+@synthesize storeDurability = _storeDurability;
 
 + (RKManagedObjectStore*)objectStoreWithStoreFilename:(NSString*)storeFilename {
     return [self objectStoreWithStoreFilename:storeFilename usingSeedDatabaseName:nil managedObjectModel:nil delegate:nil];
@@ -60,14 +62,23 @@ static NSString* const RKManagedObjectStoreThreadDictionaryEntityCacheKey = @"RK
     return [[[self alloc] initWithStoreFilename:storeFilename inDirectory:directory usingSeedDatabaseName:nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:nilOrManagedObjectModel delegate:delegate] autorelease];
 }
 
++ (RKManagedObjectStore*)objectStoreWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)directory usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel storeDurability:(RKStoreDurability)storeDurability delegate:(id)delegate {
+    return [[[self alloc] initWithStoreFilename:storeFilename inDirectory:directory usingSeedDatabaseName:nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:nilOrManagedObjectModel storeDurability:storeDurability delegate:delegate] autorelease];
+}
+
 - (id)initWithStoreFilename:(NSString*)storeFilename {
 	return [self initWithStoreFilename:storeFilename inDirectory:nil usingSeedDatabaseName:nil managedObjectModel:nil delegate:nil];
 }
 
 - (id)initWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)nilOrDirectoryPath usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel delegate:(id)delegate {
+    return [self initWithStoreFilename:storeFilename inDirectory:nilOrDirectoryPath usingSeedDatabaseName:nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:nilOrManagedObjectModel storeDurability:RKStoreDurabilityNormal delegate:delegate];
+}
+
+- (id)initWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)nilOrDirectoryPath usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel storeDurability:(RKStoreDurability)storeDurability delegate:(id)delegate {
     self = [self init];
 	if (self) {
 		_storeFilename = [storeFilename retain];
+		_storeDurability = storeDurability;
 		
 		if (nilOrDirectoryPath == nil) {
 			nilOrDirectoryPath = [RKDirectory applicationDataDirectory];
@@ -216,17 +227,53 @@ static NSString* const RKManagedObjectStoreThreadDictionaryEntityCacheKey = @"RK
 }
 
 - (void)createPersistentStoreCoordinator {
+    NSAssert(self.storeDurability > RKStoreDurabilityNotSpecified, @"Must specify a store durability.");
+
 	NSURL *storeUrl = [NSURL fileURLWithPath:self.pathToStoreFile];
 	
 	NSError *error;
     _persistentStoreCoordinator = [[NSPersistentStoreCoordinator alloc] initWithManagedObjectModel:_managedObjectModel];
-	
+
+    // Performance-tuned pragmas
+    NSDictionary *pragmaOptions;
+    NSString *storeType;
+
+    switch (self.storeDurability) {
+        case RKStoreDurabilityOff:
+            storeType = NSInMemoryStoreType;
+            pragmaOptions = nil; // SQLite only
+            break;
+        case RKStoreDurabilityLow:
+            storeType = NSSQLiteStoreType;
+            pragmaOptions = [NSDictionary dictionaryWithKeysAndObjects:
+                             @"synchronous", @"OFF",
+                             @"fullfsync", @"0",
+                             nil];
+            break;
+        case RKStoreDurabilityNormal:
+            storeType = NSSQLiteStoreType;
+            pragmaOptions = [NSDictionary dictionaryWithKeysAndObjects:
+                             @"synchronous", @"NORMAL",
+                             @"fullfsync", @"0",
+                             nil];
+            break;
+        case RKStoreDurabilityMaximum:
+            storeType = NSSQLiteStoreType;
+            pragmaOptions = [NSDictionary dictionaryWithKeysAndObjects:
+                             @"synchronous", @"FULL",
+                             @"fullfsync", @"1",
+                             nil];
+            break;
+    }
+
 	// Allow inferred migration from the original version of the application.
-	NSDictionary *options = [NSDictionary dictionaryWithObjectsAndKeys:
-							 [NSNumber numberWithBool:YES], NSMigratePersistentStoresAutomaticallyOption,
-							 [NSNumber numberWithBool:YES], NSInferMappingModelAutomaticallyOption, nil];
+	NSDictionary *options = [NSDictionary dictionaryWithKeysAndObjects:
+							 NSMigratePersistentStoresAutomaticallyOption, [NSNumber numberWithBool:YES],
+							 NSInferMappingModelAutomaticallyOption, [NSNumber numberWithBool:YES],
+                             NSSQLitePragmasOption, pragmaOptions,
+                             nil];
 	
-	if (![_persistentStoreCoordinator addPersistentStoreWithType:NSSQLiteStoreType configuration:nil URL:storeUrl options:options error:&error]) {
+	if (![_persistentStoreCoordinator addPersistentStoreWithType:storeType configuration:nil URL:storeUrl options:options error:&error]) {
 		if (self.delegate != nil && [self.delegate respondsToSelector:@selector(managedObjectStore:didFailToCreatePersistentStoreCoordinatorWithError:)]) {
 			[self.delegate managedObjectStore:self didFailToCreatePersistentStoreCoordinatorWithError:error];
 		} else {
@@ -348,46 +395,72 @@ static NSString* const RKManagedObjectStoreThreadDictionaryEntityCacheKey = @"RK
     // NOTE: We coerce the primary key into a string (if possible) for convenience. Generally
     // primary keys are expressed either as a number of a string, so this lets us support either case interchangeably
     id lookupValue = [primaryKeyValue respondsToSelector:@selector(stringValue)] ? [primaryKeyValue stringValue] : primaryKeyValue;
-    NSArray* objects = nil;
     NSString* entityName = entity.name;
+
+    NSMutableDictionary* dictionary = [self objectCacheForEntity:entity withPrimaryKeyAttribute:primaryKeyAttribute];
+    NSAssert1(dictionary, @"Thread local cache of %@ objects should not be nil", entityName);
+    object = [dictionary objectForKey:lookupValue];
+
+    if (object == nil) {
+        object = [[[NSManagedObject alloc] initWithEntity:entity insertIntoManagedObjectContext:self.managedObjectContext] autorelease];
+        [dictionary setObject:object forKey:lookupValue];
+    }
+
+	return object;
+}
+
+- (NSMutableDictionary*)objectCacheForEntity:(NSEntityDescription*)entity withPrimaryKeyAttribute:(NSString*)primaryKeyAttribute;
+{
+    //
+    // Use thread-local storage to build a dictionary in the following format:
+    //   threadStorage["RKEntityCacheKey"] = {
+    //      entityClassName1: {
+    //              primaryKeyCoercedToString1: { ... the object ... },
+    //              primaryKeyCoercedToString2: { ... the object ... },
+    //      }
+    //   }
+    //
+    // First check for the existence of the cache, and create if necessary.
+    // Return => threadStorage["RKEntityCacheKey"][entity.name]
+    //
+
+    NSArray* objects = nil;
     NSMutableDictionary* threadDictionary = [[NSThread currentThread] threadDictionary];
     
     if (nil == [threadDictionary objectForKey:RKManagedObjectStoreThreadDictionaryEntityCacheKey]) {
         [threadDictionary setObject:[NSMutableDictionary dictionary] forKey:RKManagedObjectStoreThreadDictionaryEntityCacheKey];
     }
-    
-    // Construct the cache if necessary
+
     NSMutableDictionary* entityCache = [threadDictionary objectForKey:RKManagedObjectStoreThreadDictionaryEntityCacheKey];
-    if (nil == [entityCache objectForKey:entityName]) {
+
+    if (nil == [entityCache objectForKey:entity.name]) {
+        // Note: I tried prefetching all relationships but didn't see any
+        // performance increase. Likely application-specific. [ETM]
         NSFetchRequest* fetchRequest = [[[NSFetchRequest alloc] init] autorelease];
         [fetchRequest setEntity:entity];
         [fetchRequest setReturnsObjectsAsFaults:NO];
+
         objects = [NSManagedObject executeFetchRequest:fetchRequest];
         RKLogInfo(@"Caching all %lu %@ objects to thread local storage", (unsigned long) [objects count], entity.name);
-        NSMutableDictionary* dictionary = [NSMutableDictionary dictionary];
-        BOOL coerceToString = [[[objects lastObject] valueForKey:primaryKeyAttribute] respondsToSelector:@selector(stringValue)];
-        for (id theObject in objects) {			
+
+        NSMutableDictionary* primaryKeyToObjectDictionary = [NSMutableDictionary dictionary];
+
+        // Coerce object's primary key to NSString, if possible.
+        id testObjectPrimaryKeyValue = [[objects lastObject] valueForKey:primaryKeyAttribute];
+        BOOL coerceToString = [testObjectPrimaryKeyValue respondsToSelector:@selector(stringValue)];
+
+        for (id theObject in objects) {
             id attributeValue = [theObject valueForKey:primaryKeyAttribute];
-            // Coerce to a string if possible
             attributeValue = coerceToString ? [attributeValue stringValue] : attributeValue;
             if (attributeValue) {
-                [dictionary setObject:theObject forKey:attributeValue];
+                [primaryKeyToObjectDictionary setObject:theObject forKey:attributeValue];
             }
         }
         
-        [entityCache setObject:dictionary forKey:entityName];
+        [entityCache setObject:primaryKeyToObjectDictionary forKey:entity.name];
     }
     
-    NSMutableDictionary* dictionary = [entityCache objectForKey:entityName];
-    NSAssert1(dictionary, @"Thread local cache of %@ objects should not be nil", entityName);
-    object = [dictionary objectForKey:lookupValue];
-    
-    if (object == nil) {
-        object = [[[NSManagedObject alloc] initWithEntity:entity insertIntoManagedObjectContext:self.managedObjectContext] autorelease];
-        [dictionary setObject:object forKey:lookupValue];
-    }
-        
-	return object;
+    return [entityCache objectForKey:entity.name];
 }
 
 - (NSArray*)objectsForResourcePath:(NSString *)resourcePath {

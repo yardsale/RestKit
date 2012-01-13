@@ -42,6 +42,7 @@ static NSNumber *defaultBatchSize = nil;
 	NSFetchRequest *fetchRequest = [[[NSFetchRequest alloc] init] autorelease];
 	NSEntityDescription *entity = [self entity];
 	[fetchRequest setEntity:entity];
+	[fetchRequest setReturnsObjectsAsFaults:NO];
 	return fetchRequest;
 }
 
@@ -290,6 +291,7 @@ static NSNumber *defaultBatchSize = nil;
 {
 	NSFetchRequest *request = [[[NSFetchRequest alloc] init] autorelease];
 	[request setEntity:[self entityDescriptionInContext:context]];
+	[request setReturnsObjectsAsFaults:NO];
 	
 	return request;	
 }
