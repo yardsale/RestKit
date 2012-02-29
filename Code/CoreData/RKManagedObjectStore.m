@@ -235,8 +235,8 @@ static NSString* const RKManagedObjectStoreThreadDictionaryEntityCacheKey = @"RK
     _persistentStoreCoordinator = [[NSPersistentStoreCoordinator alloc] initWithManagedObjectModel:_managedObjectModel];
 
     // Performance-tuned pragmas
-    NSDictionary *pragmaOptions;
-    NSString *storeType;
+    NSDictionary *pragmaOptions = nil;
+    NSString *storeType = nil;
 
     switch (self.storeDurability) {
         case RKStoreDurabilityOff:
