@@ -75,6 +75,13 @@
 @property (nonatomic) BOOL suspended;
 
 /**
+ * Prevent updates to suspended regardless of network connectivity changes.
+ * When unlocking, you should determine the correct value for suspended
+ * based on connectivity and update the property.
+ */
+@property (nonatomic, assign) BOOL lockSuspended;
+
+/**
  * Returns the total number of requests that are currently loading
  */
 @property (nonatomic, readonly) NSUInteger loadingCount;

@@ -54,6 +54,7 @@ static const NSTimeInterval kFlushDelay = 0.3;
 @synthesize concurrentRequestsLimit = _concurrentRequestsLimit;
 @synthesize requestTimeout = _requestTimeout;
 @synthesize suspended = _suspended;
+@synthesize lockSuspended = _lockSuspended;
 @synthesize loadingCount = _loadingCount;
 
 #if TARGET_OS_IPHONE
@@ -126,6 +127,7 @@ static const NSTimeInterval kFlushDelay = 0.3;
 - (id)init {
 	if ((self = [super init])) {
 		_requests = [[NSMutableArray alloc] init];
+		_lockSuspended = NO;
 		_suspended = YES;
 		_loadingCount = 0;
 		_concurrentRequestsLimit = 5;
@@ -179,9 +181,9 @@ static const NSTimeInterval kFlushDelay = 0.3;
 }
 
 - (NSString*)description {
-    return [NSString stringWithFormat:@"<%@: %p name=%@ suspended=%@ requestCount=%d loadingCount=%d/%d>", 
+    return [NSString stringWithFormat:@"<%@: %p name=%@ suspended=%@ lockSuspended=%@ requestCount=%d loadingCount=%d/%d>", 
             NSStringFromClass([self class]), self, self.name, self.suspended ? @"YES" : @"NO", 
-            self.count, self.loadingCount, self.concurrentRequestsLimit];
+            self.lockSuspended ? @"YES" : @"NO", self.count, self.loadingCount, self.concurrentRequestsLimit];
 }
 
 - (void)setLoadingCount:(NSUInteger)count {
@@ -286,32 +288,34 @@ static const NSTimeInterval kFlushDelay = 0.3;
 	[pool drain];
 }
 
-- (void)setSuspended:(BOOL)isSuspended {    
-    if (_suspended != isSuspended) {
-        if (isSuspended) {
-            RKLogDebug(@"Queue %@ has been suspended", self);
-            
-            // Becoming suspended
-            if ([_delegate respondsToSelector:@selector(requestQueueWasSuspended:)]) {
-                [_delegate requestQueueWasSuspended:self];
-            }
-        } else {
-            RKLogDebug(@"Queue %@ has been unsuspended", self);
-            
-            // Becoming unsupended
-            if ([_delegate respondsToSelector:@selector(requestQueueWasUnsuspended:)]) {
-                [_delegate requestQueueWasUnsuspended:self];
-            }
-        }
-    }
+- (void)setSuspended:(BOOL)isSuspended {
+	if (!_lockSuspended) {
+		if (_suspended != isSuspended) {
+			if (isSuspended) {
+				RKLogDebug(@"Queue %@ has been suspended", self);
 
-	_suspended = isSuspended;
+				// Becoming suspended
+				if ([_delegate respondsToSelector:@selector(requestQueueWasSuspended:)]) {
+					[_delegate requestQueueWasSuspended:self];
+				}
+			} else {
+				RKLogDebug(@"Queue %@ has been unsuspended", self);
 
-	if (!_suspended) {
-		[self loadNextInQueue];
-	} else if (_queueTimer) {
-		[_queueTimer invalidate];
-		_queueTimer = nil;
+				// Becoming unsupended
+				if ([_delegate respondsToSelector:@selector(requestQueueWasUnsuspended:)]) {
+					[_delegate requestQueueWasUnsuspended:self];
+				}
+			}
+		}
+
+		_suspended = isSuspended;
+
+		if (!_suspended) {
+			[self loadNextInQueue];
+		} else if (_queueTimer) {
+			[_queueTimer invalidate];
+			_queueTimer = nil;
+		}
 	}
 }
 
