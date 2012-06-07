@@ -46,12 +46,25 @@ extern NSString* const RKManagedObjectStoreDidFailSaveNotification;
 
 ///////////////////////////////////////////////////////////////////
 
+// Configurable store durability, for tuning performance.
+
+typedef enum {
+    RKStoreDurabilityNotSpecified=0,
+    RKStoreDurabilityOff,        // In-memory store. Negligible performance increase on mobile devices, big boost elsewhere.
+    RKStoreDurabilityLow,        // Persisted to disk but makes no effort to sync; faster.
+    RKStoreDurabilityNormal,     // Default; best-effort syncing.
+    RKStoreDurabilityMaximum,    // Updates guaranteed to flush to disk; slow.
+} RKStoreDurability;
+
+///////////////////////////////////////////////////////////////////
+
 @interface RKManagedObjectStore : NSObject {
     NSObject<RKManagedObjectStoreDelegate>* _delegate;
     NSString* _storeFilename;
     NSString* _pathToStoreFile;
     NSManagedObjectModel* _managedObjectModel;
     NSPersistentStoreCoordinator* _persistentStoreCoordinator;
+    RKStoreDurability _storeDurability;
 }
 
 // The delegate for this object store
@@ -66,6 +79,9 @@ extern NSString* const RKManagedObjectStoreDidFailSaveNotification;
 // Core Data
 @property (nonatomic, readonly) NSManagedObjectModel* managedObjectModel;
 @property (nonatomic, readonly) NSPersistentStoreCoordinator* persistentStoreCoordinator;
+
+// Store type (SQLite, in-memory) and pragma presets
+@property (nonatomic, assign) RKStoreDurability storeDurability;
 
 ///-----------------------------------------------------------------------------
 /// @name Accessing the Default Object Store
@@ -123,6 +139,15 @@ extern NSString* const RKManagedObjectStoreDidFailSaveNotification;
  * provided is nil, all models will be merged from the main bundle for you.
  */
 + (RKManagedObjectStore*)objectStoreWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)directory usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel delegate:(id)delegate;
+
+/**
+ * Initialize a new managed object store backed by a SQLite database with the specified filename,
+ * in the specified directory, with the specified data durability. If no directory is specified, will
+ * use the app's Documents directory. If a seed database name is provided and no existing database
+ * is found, initialize the store by copying the seed database from the main bundle. If the
+ * managed object model provided is nil, all models will be merged from the main bundle for you.
+ */
++ (RKManagedObjectStore*)objectStoreWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)directory usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel storeDurability:(RKStoreDurability)storeDurability delegate:(id)delegate;
 
 /**
  * Initialize a new managed object store with a SQLite database with the filename specified

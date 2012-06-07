@@ -30,6 +30,7 @@
 #import "RKFetchRequestManagedObjectCache.h"
 #import "NSBundle+RKAdditions.h"
 #import "NSManagedObjectContext+RKAdditions.h"
+#import "NSDictionary+RKAdditions.h"
 
 // Set Logging Component
 #undef RKLogComponent
@@ -58,6 +59,7 @@ static RKManagedObjectStore *defaultObjectStore = nil;
 @synthesize managedObjectModel = _managedObjectModel;
 @synthesize persistentStoreCoordinator = _persistentStoreCoordinator;
 @synthesize cacheStrategy = _cacheStrategy;
+@synthesize storeDurability = _storeDurability;
 @synthesize primaryManagedObjectContext;
 
 + (RKManagedObjectStore *)defaultObjectStore {
@@ -103,14 +105,23 @@ static RKManagedObjectStore *defaultObjectStore = nil;
     return [[[self alloc] initWithStoreFilename:storeFilename inDirectory:directory usingSeedDatabaseName:nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:nilOrManagedObjectModel delegate:delegate] autorelease];
 }
 
++ (RKManagedObjectStore*)objectStoreWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)directory usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel storeDurability:(RKStoreDurability)storeDurability delegate:(id)delegate {
+    return [[[self alloc] initWithStoreFilename:storeFilename inDirectory:directory usingSeedDatabaseName:nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:nilOrManagedObjectModel storeDurability:storeDurability delegate:delegate] autorelease];
+}
+
 - (id)initWithStoreFilename:(NSString*)storeFilename {
     return [self initWithStoreFilename:storeFilename inDirectory:nil usingSeedDatabaseName:nil managedObjectModel:nil delegate:nil];
 }
 
 - (id)initWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)nilOrDirectoryPath usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel delegate:(id)delegate {
+    return [self initWithStoreFilename:storeFilename inDirectory:nilOrDirectoryPath usingSeedDatabaseName:nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:nilOrManagedObjectModel storeDurability:RKStoreDurabilityNormal delegate:delegate];
+}
+
+- (id)initWithStoreFilename:(NSString *)storeFilename inDirectory:(NSString *)nilOrDirectoryPath usingSeedDatabaseName:(NSString *)nilOrNameOfSeedDatabaseInMainBundle managedObjectModel:(NSManagedObjectModel*)nilOrManagedObjectModel storeDurability:(RKStoreDurability)storeDurability delegate:(id)delegate {
     self = [self init];
     if (self) {
         _storeFilename = [storeFilename retain];
+        _storeDurability = storeDurability;
 
         if (nilOrDirectoryPath == nil) {
             // If initializing into Application Data directory, ensure the directory exists
@@ -311,6 +322,7 @@ static RKManagedObjectStore *defaultObjectStore = nil;
 }
 
 - (void)createPersistentStoreCoordinator {
+    NSAssert(self.storeDurability > RKStoreDurabilityNotSpecified, @"Must specify a store durability.");
     NSAssert(_managedObjectModel, @"Cannot create persistent store coordinator without a managed object model");
     NSAssert(!_persistentStoreCoordinator, @"Cannot create persistent store coordinator: one already exists.");
     NSURL *storeURL = [NSURL fileURLWithPath:self.pathToStoreFile];
@@ -318,12 +330,48 @@ static RKManagedObjectStore *defaultObjectStore = nil;
     NSError *error;
     _persistentStoreCoordinator = [[NSPersistentStoreCoordinator alloc] initWithManagedObjectModel:_managedObjectModel];
 
+    // Performance-tuned pragmas
+    NSDictionary *pragmaOptions = [NSDictionary dictionary];
+    NSString *storeType;
+    
+    switch (self.storeDurability) {
+        case RKStoreDurabilityOff:
+            storeType = NSInMemoryStoreType;
+            pragmaOptions = [NSDictionary dictionary]; // SQLite only
+            break;
+        case RKStoreDurabilityLow:
+            storeType = NSSQLiteStoreType;
+            pragmaOptions = [NSDictionary dictionaryWithKeysAndObjects:
+                             @"synchronous", @"OFF",
+                             @"fullfsync", @"0",
+                             nil];
+            break;
+        case RKStoreDurabilityNormal:
+            storeType = NSSQLiteStoreType;
+            pragmaOptions = [NSDictionary dictionaryWithKeysAndObjects:
+                             @"synchronous", @"NORMAL",
+                             @"fullfsync", @"0",
+                             nil];
+            break;
+        case RKStoreDurabilityMaximum:
+            storeType = NSSQLiteStoreType;
+            pragmaOptions = [NSDictionary dictionaryWithKeysAndObjects:
+                             @"synchronous", @"FULL",
+                             @"fullfsync", @"1",
+                             nil];
+            break;
+        case RKStoreDurabilityNotSpecified:
+            break;
+    }
+    
     // Allow inferred migration from the original version of the application.
-    NSDictionary *options = [NSDictionary dictionaryWithObjectsAndKeys:
-                             [NSNumber numberWithBool:YES], NSMigratePersistentStoresAutomaticallyOption,
-                             [NSNumber numberWithBool:YES], NSInferMappingModelAutomaticallyOption, nil];
+	NSDictionary *options = [NSDictionary dictionaryWithKeysAndObjects:
+							 NSMigratePersistentStoresAutomaticallyOption, [NSNumber numberWithBool:YES],
+							 NSInferMappingModelAutomaticallyOption, [NSNumber numberWithBool:YES],
+                             NSSQLitePragmasOption, pragmaOptions,
+                             nil];
 
-    if (![_persistentStoreCoordinator addPersistentStoreWithType:NSSQLiteStoreType configuration:nil URL:storeURL options:options error:&error]) {
+    if (![_persistentStoreCoordinator addPersistentStoreWithType:storeType configuration:nil URL:storeURL options:options error:&error]) {
         if (self.delegate != nil && [self.delegate respondsToSelector:@selector(managedObjectStore:didFailToCreatePersistentStoreCoordinatorWithError:)]) {
             [self.delegate managedObjectStore:self didFailToCreatePersistentStoreCoordinatorWithError:error];
         } else {

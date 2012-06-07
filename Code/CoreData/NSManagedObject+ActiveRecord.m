@@ -60,6 +60,7 @@ RK_FIX_CATEGORY_BUG(NSManagedObject_ActiveRecord)
     NSFetchRequest *fetchRequest = [[[NSFetchRequest alloc] init] autorelease];
     NSEntityDescription *entity = [self entity];
     [fetchRequest setEntity:entity];
+    [fetchRequest setReturnsObjectsAsFaults:NO];
     return fetchRequest;
 }
 
@@ -326,6 +327,7 @@ RK_FIX_CATEGORY_BUG(NSManagedObject_ActiveRecord)
 {
     NSFetchRequest *request = [[[NSFetchRequest alloc] init] autorelease];
     [request setEntity:[self entityDescriptionInContext:context]];
+    [request setReturnsObjectsAsFaults:NO];
 
     return request;
 }
