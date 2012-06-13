@@ -332,7 +332,7 @@ static RKManagedObjectStore *defaultObjectStore = nil;
 
     // Performance-tuned pragmas
     NSDictionary *pragmaOptions = [NSDictionary dictionary];
-    NSString *storeType;
+    NSString *storeType = nil;
     
     switch (self.storeDurability) {
         case RKStoreDurabilityOff:
