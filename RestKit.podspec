@@ -4,7 +4,7 @@ Pod::Spec.new do |s|
   s.summary  = 'RestKit is a framework for consuming and modeling RESTful web resources on iOS and OS X.'
   s.homepage = 'http://www.restkit.org'
   s.author   = { 'Blake Watters' => 'blakewatters@gmail.com' }
-  s.source   = { :git => 'https://github.com/yardsale/RestKit.git', :commit => '6ce5142a00fde5890277f58c0e2a16e3474660d1' }
+  s.source   = { :git => 'https://github.com/yardsale/RestKit.git', :tag => '0.9.3-yardsale' }
   s.license  = 'Apache License, Version 2.0'
 
   # The headers need to maintain the directory structure, but only from 'Code' on down.
